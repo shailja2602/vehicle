@@ -1,0 +1,64 @@
+import RPi.GPIO as GPIO
+import time
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+import drivers
+
+# Suppress GPIO warnings about channel conflicts
+GPIO.setwarnings(False)
+
+# Initialize LCD
+display = drivers.Lcd()  # Initialize the LCD display
+
+# Azure Service Bus configuration
+service_namespace = 'SPARKTIET'
+sas_name = 'RootManageSharedAccessKey'
+sas_key = 'pGAWHFVm2voCfxL7ogRe3eDoz1I5Fn2gW+ASbKubG1E='
+queue_name = 'V2V'
+
+servicebus_client = ServiceBusClient.from_connection_string(
+    conn_str=f'Endpoint=sb://{service_namespace}.servicebus.windows.net/;SharedAccessKeyName={sas_name};SharedAccessKey={sas_key}',
+    logging_enable=True
+)
+
+# Function to receive and display message
+def receive_and_display_message():
+    with servicebus_client.get_queue_receiver(queue_name, max_wait_time=5) as receiver:
+        for message in receiver:
+            try:
+                # Iterate over the generator object to get the actual messages
+                for msg in message.body:
+                    # Decode each message and display it on the LCD
+                    body = msg.decode('utf-8')
+                    print(f"Received message: {body}")
+
+                    # Split the message into two lines
+                    lcd_text_line1, lcd_text_line2 = body.split('\n')
+
+                    # Display message on LCD
+                    display.lcd_clear()
+                    display.lcd_display_string(lcd_text_line1, 1)
+                    display.lcd_display_string(lcd_text_line2, 2)
+
+                    # Wait for some time before clearing the LCD display
+                    time.sleep(9)
+
+                    # Clear the display
+                    display.lcd_clear()
+
+            except Exception as e:
+                print(f"Error receiving message: {e}")
+
+            finally:
+                receiver.complete_message(message)
+
+# Main loop
+try:
+    while True:
+        # Receive and display message
+        receive_and_display_message()
+
+except KeyboardInterrupt:
+    GPIO.cleanup()
+    print("Program interrupted.")
+finally:
+    display.lcd_clear()  # Clear the display before exiting
