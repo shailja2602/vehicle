@@ -1,0 +1,121 @@
+import RPi.GPIO as GPIO
+import time
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+import drivers
+from time import sleep
+
+# Suppress GPIO warnings about channel conflicts
+GPIO.setwarnings(False)
+
+# Set up GPIO for motors and ultrasonic sensor
+motor1_pin1 = 17
+motor1_pin2 = 27
+motor2_pin1 = 22
+motor2_pin2 = 23
+
+ultrasonic_trigger = 20
+ultrasonic_echo = 21
+
+# Initialize LCD
+display = drivers.Lcd()  # Initialize the LCD display
+
+# Azure Service Bus configuration
+service_namespace = 'SPARKTIET'
+sas_name = 'RootManageSharedAccessKey'
+sas_key = 'pGAWHFVm2voCfxL7ogRe3eDoz1I5Fn2gW+ASbKubG1E='
+queue_name = 'V2V'
+
+servicebus_client = ServiceBusClient.from_connection_string(
+    conn_str=f'Endpoint=sb://sparktiet.servicebus.windows.net/;SharedAccessKeyName={sas_name};SharedAccessKey={sas_key}',
+    logging_enable=True
+)
+
+# Set up GPIO mode and setup
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(motor1_pin1, GPIO.OUT)
+GPIO.setup(motor1_pin2, GPIO.OUT)
+GPIO.setup(motor2_pin1, GPIO.OUT)
+GPIO.setup(motor2_pin2, GPIO.OUT)
+GPIO.setup(ultrasonic_trigger, GPIO.OUT)
+GPIO.setup(ultrasonic_echo, GPIO.IN)
+
+# Ultrasonic Sensor Function
+def get_distance():
+    GPIO.output(ultrasonic_trigger, False)
+    time.sleep(0.1)
+
+    GPIO.output(ultrasonic_trigger, True)
+    time.sleep(0.00001)
+    GPIO.output(ultrasonic_trigger, False)
+
+    pulse_start = time.time()
+    while GPIO.input(ultrasonic_echo) == 0:
+        pulse_start = time.time()
+
+    pulse_end = time.time()
+    while GPIO.input(ultrasonic_echo) == 1:
+        pulse_end = time.time()
+
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 17150
+    distance = round(distance, 2)
+
+    return distance
+
+# Function to move the vehicle forward
+def move_forward():
+    GPIO.output(motor1_pin1, GPIO.HIGH)
+    GPIO.output(motor1_pin2, GPIO.LOW)
+    GPIO.output(motor2_pin1, GPIO.HIGH)
+    GPIO.output(motor2_pin2, GPIO.LOW)
+
+# Function to stop the vehicle
+def stop_vehicle():
+    GPIO.output(motor1_pin1, GPIO.LOW)
+    GPIO.output(motor1_pin2, GPIO.LOW)
+    GPIO.output(motor2_pin1, GPIO.LOW)
+    GPIO.output(motor2_pin2, GPIO.LOW)
+
+try:
+    move_forward()  # Start moving forward
+
+    while True:
+        # Implement obstacle detection logic using ultrasonic sensor
+        distance = get_distance()
+
+        if distance < 50:  # Adjust this threshold based on your scenario
+            print(f"Obstacle detected! Distance: {distance} cm")
+
+            # Display message on LCD with distance information
+            lcd_text_line1 = "Pedestrian ahead!"
+            lcd_text_line2 = f"Distance: {distance} cm"
+            print(f"LCD Text: {lcd_text_line1}\n{lcd_text_line2}")
+
+            # Clear the display
+            display.lcd_clear()
+
+            # Write the message to the display
+            display.lcd_display_string(lcd_text_line1, 1)
+            display.lcd_display_string(lcd_text_line2, 2)
+
+
+            # Stop the vehicle
+            stop_vehicle()
+
+            # Send message to Azure Service Bus Queue
+            with servicebus_client.get_queue_sender(queue_name) as sender:
+                message = ServiceBusMessage(body=bytes(f"{lcd_text_line1}\n{lcd_text_line2}", 'utf-8'))
+                sender.send_messages(message)
+
+            # Remove this time.sleep(1) line
+            # time.sleep(1)  # Wait for the LCD to display the message
+
+            print("Vehicle stopped.")
+            break  # Exit the loop when the obstacle is detected
+
+except KeyboardInterrupt:
+    stop_vehicle()   # Stop the vehicle if the program is interrupted
+    GPIO.cleanup()
+    print("Program interrupted.")
+finally:
+    display.lcd_clear()  # Clear the display before exiting
